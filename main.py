@@ -1,61 +1,75 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import time
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0',
+    "Accept-Language": "en-US,en;q=0.5"
+}
+
+def get_text(soup, selector, default='N/A'):
+    tag = soup.select_one(selector)
+    return tag.get_text(strip=True) if tag else default
+
+def get_table_value(soup, label):
+    tag = soup.find('th', string=label)
+    return tag.find_next('td').get_text(strip=True) if tag else 'N/A'
 
 def scrape_product_details(url):
-    headers = {'User-Agent': 'Mozilla 5.0',"Accept-Language": "en-US,en;q=0.5"}
-    response = requests.get(url, headers=headers)
-    print(response)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.content, 'html.parser')
+    try:
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code != 200:
+            print(f"Failed to fetch {url}")
+            return None
 
-        # Extract product details
-        product_name = soup.find('span', {'class': 'a-size-medium'}).get_text(strip=True)
-        product_price = soup.find('span', {'class': 'a-price-whole'}).get_text(strip=True)
-        rating = soup.find('span', {'class': 'a-icon-alt'}).get_text(strip=True)
-        num_reviews = soup.find('span', {'id': 'acrCustomerReviewText'}).get_text(strip=True)
-        asin = soup.find('th', text='ASIN').find_next('td').get_text(strip=True)
-        product_description = soup.find('span', {'id': 'productDescription'}).get_text(strip=True)
-        manufacturer = soup.find('th', text='Manufacturer').find_next('td').get_text(strip=True)
+        soup = BeautifulSoup(response.content, 'html.parser')
 
         return {
             'Product URL': url,
-            'Product Name': product_name,
-            'Product Price': product_price,
-            'Rating': rating,
-            'Number of Reviews': num_reviews,
-            'ASIN': asin,
-            'Product Description': product_description,
-            'Manufacturer': manufacturer
+            'Product Name': get_text(soup, 'span.a-size-medium'),
+            'Product Price': get_text(soup, 'span.a-price-whole'),
+            'Rating': get_text(soup, 'span.a-icon-alt'),
+            'Number of Reviews': get_text(soup, '#acrCustomerReviewText'),
+            'ASIN': get_table_value(soup, 'ASIN'),
+            'Manufacturer': get_table_value(soup, 'Manufacturer'),
+            'Product Description': get_text(soup, '#productDescription')
         }
-    else:
-        print(f"Failed to fetch data from URL: {url}")
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
         return None
 
-data = []
+def scrape_search_results(product, num_pages):
+    all_data = []
+    for page in range(1, num_pages + 1):
+        search_url = f'https://www.amazon.in/s?k={product}&page={page}'
+        try:
+            response = requests.get(search_url, headers=HEADERS)
+            if response.status_code != 200:
+                print(f"Failed to fetch search page {page}")
+                continue
 
-num_pages = 20
+            soup = BeautifulSoup(response.content, 'html.parser')
+            product_links = [a['href'] for a in soup.select('.s-main-slot a.s-no-outline')]
 
-for page in range(1, num_pages + 1):
-    page_url = f'https://www.amazon.in/s?k=bags&crid=2M096C61O4MLT&qid=1653308124&sprefix=ba%2Caps%2C283&ref=sr_pg_{page}'
-    headers = {'User-Agent': 'Mozilla 5.0',"Accept-Language": "en-US,en;q=0.5"}
-    response = requests.get(page_url, headers=headers)
-    print(response)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.content, 'html.parser')
-        product_links = [a['href'] for a in soup.select('.s-main-slot a.s-no-outline')]
-        # print(product_links)
-        for link in product_links:
-            
-            product_url = f'https://www.amazon.in{link}'
-            product_data = scrape_product_details(product_url)
-            if product_data:
-                data.append(product_data)
+            for link in product_links:
+                full_url = f"https://www.amazon.in{link}"
+                product_data = scrape_product_details(full_url)
+                if product_data:
+                    all_data.append(product_data)
+                time.sleep(1.5)  # Polite delay to avoid blocking
+        except Exception as e:
+            print(f"Error on search page {page}: {e}")
+    return all_data
 
-print(data)
+if __name__ == "__main__":
+    product = input("Enter a product: ")
+    pages = int(input("Enter no of pages: "))
+    result_data = scrape_search_results(product, num_pages=pages)
 
-df = pd.DataFrame(data)
-
-print(df)
-
-df.to_csv('amazon_product_data.csv', index=False)
+    if result_data:
+        df = pd.DataFrame(result_data)
+        df.to_csv("amazon_product_data.csv", index=False)
+        print("Data saved to amazon_product_data.csv")
+    else:
+        print("No data was scraped.")
